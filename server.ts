@@ -505,6 +505,62 @@ async function startServer() {
     res.json({ token, user: sanitizeUser(user) });
   });
 
+  app.post('/api/auth/netlify', (req: any, res: any) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const name = String(req.body?.name || email.split('@')[0] || 'User').trim();
+    const roles: string[] = Array.isArray(req.body?.roles) ? req.body.roles : [];
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email from Netlify Identity is required.' });
+    }
+
+    let user = db.users.find((u: any) => u.email === email);
+    if (!user) {
+      const isFirstUser = db.users.length === 0;
+      const isNetlifyAdmin = roles.some((r) => String(r).toLowerCase() === 'admin');
+      const role = isFirstUser || isNetlifyAdmin ? 'admin' : 'customer';
+
+      user = {
+        id: crypto.randomUUID(),
+        name,
+        email,
+        passwordHash: hashPassword(crypto.randomBytes(24).toString('hex')),
+        role,
+        planId: null,
+        status: role === 'admin' ? 'active' : 'pending',
+        nextPaymentDate: null,
+        lastReminderSentForDate: null,
+        createdAt: new Date().toISOString(),
+      };
+      db.users.push(user);
+
+      if (role === 'admin') {
+        addNotification({
+          targetUserId: 'admin',
+          title: 'Admin Account Linked via Netlify Identity',
+          body: `Welcome ${name}. Your Netlify Identity account has full Administrator privileges.`,
+          type: 'system',
+        });
+      } else {
+        addNotification({
+          targetUserId: user.id,
+          title: 'Welcome to Speed 5G Network',
+          body: 'Select a Wi-Fi plan from your dashboard to activate your connection.',
+          type: 'system',
+        });
+      }
+    } else if (roles.some((r) => String(r).toLowerCase() === 'admin') && user.role !== 'admin') {
+      user.role = 'admin';
+      user.status = 'active';
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    db.sessions[token] = user.id;
+    saveDb();
+
+    res.json({ token, user: sanitizeUser(user) });
+  });
+
   app.post('/api/auth/signout', requireAuth, (req: any, res: any) => {
     delete db.sessions[req.token];
     saveDb();
@@ -513,6 +569,38 @@ async function startServer() {
 
   app.get('/api/auth/me', requireAuth, (req: any, res: any) => {
     res.json({ user: sanitizeUser(req.user) });
+  });
+
+  app.get('/api/sync', requireAuth, (req: any, res: any) => {
+    const isAdmin = req.user.role === 'admin';
+    const myTickets = isAdmin
+      ? db.tickets
+      : db.tickets.filter((t: any) => t.userId === req.user.id);
+    const myNotes = db.notifications.filter((n: any) =>
+      isAdmin
+        ? n.targetUserId === 'admin' || n.targetUserId === req.user.id
+        : n.targetUserId === req.user.id
+    );
+    const customers = isAdmin
+      ? db.users.filter((u: any) => u.role === 'customer').map((u: any) => sanitizeUser(u))
+      : [];
+
+    res.json({
+      user: sanitizeUser(req.user),
+      plans: db.plans,
+      tickets: myTickets,
+      notifications: myNotes,
+      customers,
+      devices: isAdmin ? db.devices : [],
+      routerConfig: isAdmin ? db.routerConfig : null,
+      uptimeRecords: isAdmin ? db.uptimeRecords : [],
+      jobLogs: isAdmin
+        ? {
+            ...db.jobLogs,
+            routerCheckIntervalMinutes: db.routerConfig.checkIntervalMinutes || 2,
+          }
+        : null,
+    });
   });
 
   // --- PLANS ROUTES ---

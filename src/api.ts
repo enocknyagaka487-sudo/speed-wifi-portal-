@@ -1,14 +1,34 @@
 const TOKEN_KEY = 'speed5g_auth_token';
 
+export class ApiError extends Error {
+  status: number;
+  isNetworkError: boolean;
+
+  constructor(message: string, status = 0, isNetworkError = false) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.isNetworkError = isNetworkError;
+  }
+}
+
 export function getStoredToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function setStoredToken(token: string | null): void {
-  if (token) {
-    localStorage.setItem(TOKEN_KEY, token);
-  } else {
-    localStorage.removeItem(TOKEN_KEY);
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    // ignore storage errors
   }
 }
 
@@ -26,14 +46,36 @@ export async function apiRequest<T>(
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(path, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers,
+    });
+  } catch {
+    // Retry once after brief delay for transient container wake-up
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    try {
+      response = await fetch(path, {
+        ...options,
+        headers,
+      });
+    } catch {
+      throw new ApiError(
+        'Unable to reach server. Please check your connection and try again.',
+        0,
+        true
+      );
+    }
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data?.error || `Request failed with status ${response.status}`);
+    throw new ApiError(
+      data?.error || `Request failed with status ${response.status}`,
+      response.status,
+      false
+    );
   }
   return data as T;
 }

@@ -4,7 +4,8 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Bell, CheckCheck, LogOut } from 'lucide-react';
+import netlifyIdentity from 'netlify-identity-widget';
+import { Bell, CheckCheck, LogOut, ShieldCheck } from 'lucide-react';
 import {
   AppNotification,
   ConnectedDevice,
@@ -78,38 +79,40 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const loadAllData = useCallback(async (currentUser: User) => {
+  const loadAllData = useCallback(async (_currentUser: User) => {
     try {
-      const [meRes, plansRes, ticketsRes, notesRes] = await Promise.all([
-        apiRequest<{ user: User }>('/api/auth/me'),
-        apiRequest<{ plans: Plan[] }>('/api/plans'),
-        apiRequest<{ tickets: SupportTicket[] }>('/api/tickets'),
-        apiRequest<{ notifications: AppNotification[] }>('/api/notifications'),
-      ]);
+      const syncRes = await apiRequest<{
+        user: User;
+        plans: Plan[];
+        tickets: SupportTicket[];
+        notifications: AppNotification[];
+        customers: User[];
+        devices: ConnectedDevice[];
+        routerConfig: RouterConfig | null;
+        uptimeRecords: UptimeRecord[];
+        jobLogs: JobStatusSummary | null;
+      }>('/api/sync');
 
-      setUser(meRes.user);
-      setPlans(plansRes.plans);
-      setTickets(ticketsRes.tickets);
-      setNotifications(notesRes.notifications);
+      setUser(syncRes.user);
+      setPlans(syncRes.plans || []);
+      setTickets(syncRes.tickets || []);
+      setNotifications(syncRes.notifications || []);
 
-      if (currentUser.role === 'admin') {
-        const [custRes, netRes] = await Promise.all([
-          apiRequest<{ customers: User[] }>('/api/customers'),
-          apiRequest<{
-            devices: ConnectedDevice[];
-            routerConfig: RouterConfig;
-            uptimeRecords: UptimeRecord[];
-            jobLogs: JobStatusSummary;
-          }>('/api/network/overview'),
-        ]);
-        setCustomers(custRes.customers);
-        setDevices(netRes.devices);
-        setRouterConfig(netRes.routerConfig);
-        setUptimeRecords(netRes.uptimeRecords);
-        setJobLogs(netRes.jobLogs);
+      if (syncRes.user.role === 'admin') {
+        setCustomers(syncRes.customers || []);
+        setDevices(syncRes.devices || []);
+        if (syncRes.routerConfig) {
+          setRouterConfig(syncRes.routerConfig);
+        }
+        setUptimeRecords(syncRes.uptimeRecords || []);
+        setJobLogs(syncRes.jobLogs || null);
       }
     } catch (err: any) {
-      console.error('Data refresh error:', err);
+      if (err?.status === 401) {
+        setStoredToken(null);
+        setUser(null);
+      }
+      // Transient background refresh errors are ignored silently to avoid noisy console errors
     }
   }, []);
 
@@ -138,14 +141,63 @@ export default function App() {
     init();
   }, [loadAllData]);
 
-  // Poll every 30s while signed in so 2-minute router checks and notifications update live
+  // Poll every 30s while signed in and tab is visible so 2-minute router checks and notifications update live
   useEffect(() => {
     if (!user) return;
     const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        return;
+      }
       loadAllData(user);
     }, 30000);
     return () => clearInterval(interval);
   }, [user, loadAllData]);
+
+  useEffect(() => {
+    try {
+      netlifyIdentity.init();
+    } catch {
+      // Ignore if Netlify Identity endpoint is not yet configured on host
+    }
+
+    const handleNetlifyLogin = async (netlifyUser: netlifyIdentity.User | null) => {
+      if (!netlifyUser?.email) return;
+      try {
+        const res = await apiRequest<{ token: string; user: User }>('/api/auth/netlify', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: netlifyUser.email,
+            name: netlifyUser.user_metadata?.full_name || netlifyUser.email.split('@')[0],
+            roles: netlifyUser.app_metadata?.roles || [],
+          }),
+        });
+        setStoredToken(res.token);
+        setUser(res.user);
+        setHasUsers(true);
+        netlifyIdentity.close();
+        await loadAllData(res.user);
+      } catch (err: any) {
+        setAuthError(err.message || 'Netlify Identity sync failed');
+      }
+    };
+
+    const handleNetlifyLogout = () => {
+      setStoredToken(null);
+      setUser(null);
+      setShowNotifications(false);
+    };
+
+    netlifyIdentity.on('login', handleNetlifyLogin);
+    netlifyIdentity.on('logout', handleNetlifyLogout);
+
+    return () => {
+      netlifyIdentity.off('login', handleNetlifyLogin);
+      netlifyIdentity.off('logout', handleNetlifyLogout);
+    };
+  }, [loadAllData]);
 
   async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -178,6 +230,13 @@ export default function App() {
   async function handleSignOut() {
     try {
       await apiRequest('/api/auth/signout', { method: 'POST' });
+    } catch {
+      // ignore
+    }
+    try {
+      if (netlifyIdentity.currentUser()) {
+        await netlifyIdentity.logout();
+      }
     } catch {
       // ignore
     }
@@ -371,6 +430,17 @@ export default function App() {
                     : 'Create Admin Account'
                   : 'Sign In to Portal'}
               </button>
+
+              <div className="pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => netlifyIdentity.open(authMode === 'signup' ? 'signup' : 'login')}
+                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  <ShieldCheck className="w-4 h-4 text-sky-400" />
+                  Continue with Netlify Identity Widget
+                </button>
+              </div>
             </form>
           </div>
         </main>
