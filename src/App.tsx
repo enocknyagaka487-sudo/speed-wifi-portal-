@@ -1,3 +1,4 @@
+`import netlifyIdentity from 'netlify identity widget'
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -115,20 +116,19 @@ export default function App() {
 
   useEffect(() => {
     async function init() {
-      try {
-        const boot = await apiRequest<{ hasUsers: boolean }>('/api/auth/bootstrap');
-        setHasUsers(boot.hasUsers);
-        if (!boot.hasUsers) {
-          setAuthMode('signup');
-        }
-
-        const token = getStoredToken();
-        if (token) {
-          const me = await apiRequest<{ user: User }>('/api/auth/me');
-          setUser(me.user);
-          await loadAllData(me.user);
-        }
-      } catch {
+      async function init() {
+  try {
+    const user = netlifyIdentity.currentUser();
+    if (user) {
+      setUser(user as unknown as User);
+      await loadAllData(user as unknown as User);
+    } else {
+      setAuthMode('signup');
+    }
+  } catch (err) {
+    console.error('Initialization error:', err);
+  }
+}
         setStoredToken(null);
         setUser(null);
       } finally {
@@ -147,33 +147,24 @@ export default function App() {
     return () => clearInterval(interval);
   }, [user, loadAllData]);
 
-  async function handleAuthSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setAuthError(null);
-    setSubmittingAuth(true);
-
-    try {
-      const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/signin';
-      const payload =
-        authMode === 'signup'
-          ? { name: name.trim(), email: email.trim(), password }
-          : { email: email.trim(), password };
-
-      const res = await apiRequest<{ token: string; user: User }>(endpoint, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-
-      setStoredToken(res.token);
-      setUser(res.user);
-      setHasUsers(true);
-      await loadAllData(res.user);
-    } catch (err: any) {
-      setAuthError(err.message || 'Authentication failed');
-    } finally {
-      setSubmittingAuth(false);
+`async function handleAuthSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  setAuthError(null);
+  setSubmittingAuth(true);
+  try {
+    if (authMode === 'signup') {
+      netlifyIdentity.open('signup');
+    } else {
+      netlifyIdentity.open('login');
     }
+  } catch (err: any) {
+    setAuthError(err.message || 'Authentication failed');
+  } finally {
+    setSubmittingAuth(false);
   }
+}
+
+  
 
   async function handleSignOut() {
     try {
