@@ -147,7 +147,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [user, loadAllData]);
 
- ```typescript
+ `typescript
 async function handleAuthSubmit(e: React.FormEvent) {
   e.preventDefault();
   setAuthError(null);
@@ -164,7 +164,7 @@ async function handleAuthSubmit(e: React.FormEvent) {
     setSubmittingAuth(false);
   }
 }
-```
+
   
 
   async function handleSignOut() {
