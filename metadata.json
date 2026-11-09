@@ -1,0 +1,6 @@
+{
+  "name": "Speed 5G Network — Wi-Fi ISP Portal",
+  "description": "Wi-Fi ISP billing portal, subscriber support desk, and live router operations console with topology mapping, per-device bandwidth controls, 24-hour uptime tracking, and automated Nairobi-time alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
